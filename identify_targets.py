@@ -163,7 +163,7 @@ def process_and_write_hits(blastn_record: object, args: object) -> list[object]:
         i += 1
     
     filtered_alignments: list[object] = filter_alignments(alignments, args)
-    print(f"Filtering {len(alignments)} alignments: resulting in {len(filtered_alignments)} clean insertion sequence alignments.")
+    print(f"Filtering {len(alignments)} alignments: resulting in {len(filtered_alignments)} satisfactory insertion sequence alignments.")
 
     return filtered_alignments
 
@@ -229,7 +229,7 @@ def extract_filtered_flanks(filtered_blast_file: str, args: object) -> str:
     extracted_output_filepath: str = f"{args.output}_flanking_regions.fasta"
     cmd: str = f'blastdbcmd -db {args.database} -entry_batch {output_path} -outfmt "%f" -out {extracted_output_filepath}'
     subprocess.run(cmd, shell=True) 
-    print("Flanking alignments filtered")
+    print("Alignment flanking regions extracted")
 
     return extracted_output_filepath
 
@@ -266,6 +266,7 @@ def combine_flanks(fasta_dir: str, args: object) -> str:
 
     flanks_length_limit: int = int(args.flank_length) + 50
     flanking_regions: list[SeqRecord] = []
+    not_in_seq: int = 0
     # Open the file containing separate flanking regions, append the downstream flank to the end of the upstream one and save in a list.
     with open(f"{fasta_dir}") as handle:
         records: object = SeqIO.parse(handle, "fasta")
@@ -281,11 +282,19 @@ def combine_flanks(fasta_dir: str, args: object) -> str:
                     flanking_regions.append(SeqRecord(flanks_upstream + flanks_downstream, 
                     id = record.id.split(":")[0] + ":" + flanks_upstream_coords + ":" + flanks_flanks_downstream_coords, 
                     description = record.description.split(" ", 1)[len(record.description.split(" ", 1)) - 1]))
+                else:
+                    not_in_seq += 1
             i += 1
     # Write the combined flanks into a file
     output_path: str = f"{args.output}_concat_flanks.fasta"
     SeqIO.write(flanking_regions, output_path, "fasta")
-    print("Flanks combined")
+    if not_in_seq > 0:
+        print(f"Flanks combined: excluded {not_in_seq} sequences due to flanks not present in genome file")
+    else:
+        print("Flanks combined")
+    
+    print(f"Blasting {len(flanking_regions)} flanking regions")
+
 
     return output_path
 
@@ -303,6 +312,7 @@ def blastn_flanking_regions(args: object, flanking_regions_path: str) -> str:
     flanking_blast_output: str = f"{args.output}_blasted_flanks"
 
     # Run the assembled blast command using the provided arguments
+
     blastn_cmd_txt: str = f"blastn -query {flanking_regions_path} -db {args.database} -out {flanking_blast_output}.out -max_hsps {args.alignments} -num_threads {args.threads} " \
         f"-reward {args.reward} -penalty {args.penalty} -gapopen {args.gapopen} -gapextend {args.gapextend}" \
         f" {args.other_target}"
@@ -311,17 +321,25 @@ def blastn_flanking_regions(args: object, flanking_regions_path: str) -> str:
         f"-reward {args.reward} -penalty {args.penalty} -gapopen {args.gapopen} -gapextend {args.gapextend}" \
         f" {args.other_target}"
 
-    """    
+    """
+    # It was faster to run the blast commands separately on my machine (10 core 16GB M4 Macbook Air) than to blast_formatter the ASN file.
+
     blastn_cmd_ASN = f"blastn -query {flanking_regions_path} -db {args.database} -out {flanking_blast_output}.asn -max_hsps {args.alignments} -num_threads {args.threads} -outfmt 11 " \
         f"-reward {args.reward} -penalty {args.penalty} -gapopen {args.gapopen} -gapextend {args.gapextend}" \
         f" {args.other_target}"
+    
+    blast_formatter_cmd_xml = f"blast_formatter -archive {flanking_blast_output}.asn -outfmt '5' -out {flanking_blast_output}.xml"
+
+    blast_formatter_cmd_txt = f"blast_formatter -archive {flanking_blast_output}.asn -outfmt '0' -out {flanking_blast_output}.txt"
+
+    subprocess.run(blastn_cmd_ASN, shell=True)
+    subprocess.run(blast_formatter_cmd_xml, shell=True)
+    subprocess.run(blast_formatter_cmd_txt, shell=True)
     """
 
-
     if not args.minimal:
-        subprocess.run(blastn_cmd_txt, shell=True) 
-    subprocess.run(blastn_cmd_xml, shell=True) 
-    # subprocess.run(blastn_cmd_ASN, shell=True) 
+        subprocess.run(blastn_cmd_txt, shell=True)
+    subprocess.run(blastn_cmd_xml, shell=True)
 
     print("Flanks blasted")
 

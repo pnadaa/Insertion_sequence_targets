@@ -12,6 +12,18 @@ The required dependencies are: blast, biopython, pandas
 
 A suitable locally stored blast database is also required to search against. Both the non-redundant nucleotide and locally built databases using makeblastdb have been successfully used.
 
+## Usage
+
+Below is an example of how to use the Insertion Sequence Targets program.
+
+``` bash
+python identify_targets.py \
+    --query examples/IS15.fasta \
+    --database /path/to/blastdb \
+    --output examples/IS15 \
+    --threads 1
+```
+
 ## Insertion sequence target identification
 
 To identify insertion sequence targets, run the script using `python insertion_sequence_targets_prober.py` with the following required options:
