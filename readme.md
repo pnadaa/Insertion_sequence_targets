@@ -12,6 +12,12 @@ The required dependencies are: blast, biopython, pandas
 
 A suitable locally stored blast database is also required to search against. Both the non-redundant nucleotide and locally built databases using makeblastdb have been successfully used.
 
+The tested non-redundant blast database was built using:
+
+``` bash
+update_blastdb.pl --decompress nt --num_threads 10
+```
+
 ## Usage
 
 Below is an example of how to use the Insertion Sequence Targets program.
