@@ -12,12 +12,6 @@ The required dependencies are: blast, biopython, pandas
 
 A suitable locally stored blast database is also required to search against. Both the non-redundant nucleotide and locally built databases using makeblastdb have been successfully used.
 
-The tested non-redundant blast database was built using:
-
-``` bash
-update_blastdb.pl --decompress nt --num_threads 10
-```
-
 ## Usage
 
 Below is an example of how to use the Insertion Sequence Targets program.
@@ -63,3 +57,11 @@ To identify insertion sequence targets, run the script using `python insertion_s
 -   `all_targets.fasta` A fasta of all identified targets including replicates
 -   `unique_targets.fasta` A fasta of unique identified targets - replicates are removed.
 -   `blasted_flanks.out` Blast output file containing the alignments between insertion sequence flanks and their identified targets. Good for finding potential insertions or deletions which occur during the transposition event.
+
+## Blast database
+
+The tested non-redundant blast database (660 GB) was built using update_blastdb in the blast conda package:
+
+``` bash
+update_blastdb.pl --decompress nt --num_threads 10
+```
