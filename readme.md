@@ -36,7 +36,7 @@ To identify insertion sequence targets, run the script using `python insertion_s
 -   `-o` `--output` str, Output name or directory. Default: results/query
 -   `-t` `--threads` int, Number of threads for the blast application to use. Default: 1
 -   `-f` `--flank_length` int, Length of each flanking region. Default: 200
--   `-m` `--minimal` bool, Removes any unnecessary steps for target identification to produce only target sequences. Reduces compute time by about 40% but excludes target alignments in a human-readable format. Disabled by default\
+-   `-m` `--minimal` bool, Removes any unnecessary steps for target identification to produce only target sequences. Reduces compute time by about 40% but excludes target alignments in a human-readable format. Disabled by default
 
 #### Blast search parameters and filtering options:
 
@@ -64,4 +64,28 @@ The tested non-redundant blast database (660 GB) was built using update_blastdb 
 
 ``` bash
 update_blastdb.pl --decompress nt --num_threads 10
+```
+
+## Blast counter
+
+blast_counter.py is a helper tool to parse the output csv from the initial insertion sequences blast search and count the highest number of insertion sequence copy numbers per blast search.
+The outputs can be used to guage the consensus insertion sequence from a insertion sequence blast, directly by copy number count or by downstream multiple sequence alignment and consensus determination.
+Blast counter was written by Claude Sonnet 4.5 via Perplexity then modified for the purposes of this project.
+
+Blast counter outputs two files:
+-   `output.csv` A csv file of the blasted sequence and the number of times it occurs in the blast database
+-   `output.fasta` A fasta with all insertion sequences which match the filtering criteria
+
+Options:
+-   `-i` `--input` str, Path to blast csv file.
+-   `-db` `--database` str, The path to the blast database.
+-   `-o` `--output` str, Output name or directory.
+
+-   `-mip` `--min-pident` float, Minimum percent identity threshold. Default: 0.0
+-   `-me` `--max-evalue` float, Maximum e-value threshold. Default: infinity
+-   `-mipl` `--min-pct-length` float, Minimum percentage of query length that must be aligned. Default: 0.0
+
+Example usage:
+``` bash
+python blastcounter.py -i ISEc11_insertion_seq_blast.csv -d /path/to/blastdb -o ISEc11_99pident --min-pident 99 --max-evalue 0.001 --min-pct-length 95
 ```
