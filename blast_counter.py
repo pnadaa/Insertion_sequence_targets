@@ -181,10 +181,10 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example usage:
-  %(prog)s -i blast_results.csv -d /path/to/database/name
+  %(prog)s -i blast_results.csv -db /path/to/database/name
   %(prog)s --input results.csv --database ~/blastdb/nt -o counts.csv
-  %(prog)s -i results.csv -d ~/db/mydb --min-pident 95 --max-evalue 1e-10
-  %(prog)s -i results.csv -d ~/db/mydb --min-pct-length 80
+  %(prog)s -i results.csv -db ~/db/mydb --min-pident 95 --max-evalue 1e-10
+  %(prog)s -i results.csv -db ~/db/mydb --min-pct-length 80
         """
     )
     
@@ -196,7 +196,7 @@ Example usage:
     )
     
     parser.add_argument(
-        '-d', '--database',
+        '-db', '--database',
         required=True,
         help='Path to BLAST database (full path including database name, e.g., /path/to/db/mydb)'
     )
@@ -216,7 +216,7 @@ Example usage:
     )
     
     parser.add_argument(
-        '--max-evalue', "-mxe",
+        '--max-evalue', "-me",
         type=float,
         default=float('inf'),
         help='Maximum e-value threshold (default: infinity, accepts all)'
@@ -274,7 +274,7 @@ def main():
     print(f"Total sequences extracted: {sum(sequence_counts.values())}", file=sys.stderr)
     
     # Write results to CSV
-    with open(output_file, 'w', newline='') as f:
+    with open(f"{output_file}.csv", 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['sequence', 'count'])
         
