@@ -10,11 +10,12 @@ from Bio import Blast, SeqIO
 import Bio.Seq
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
+import shutil
 
 import pandas as pd
 
 
-def parse_args() -> object:
+def parse_args() -> argparse.Namespace:
     """
     Parses arguments, sets defaults
     """
@@ -25,7 +26,7 @@ def parse_args() -> object:
                         epilog='Thanks for using! -Chris')
     parser.add_argument("-q", "--query", required = True, help="Path of the query sequence fasta file including extensions")
     parser.add_argument("-db", "--database", required = True, help = "Path of the database name excluding extensions")
-    parser.add_argument("-o", "--output", required = False, help = "Output file name. Default is query.out")
+    parser.add_argument("-o", "--output", required = False, default = "", help = "Output file name. Default is query.out")
     parser.add_argument("-f", "--flank_length", required = False, type = int, default = "200", help = "Length of how long each flanking region is. Default = 200")
     parser.add_argument("-t", "--threads", required = False, default = "1", type = int, help = "Number of threads to use. Default = 1")
     parser.add_argument("-m", "--minimal", action = "store_true", help = "Removes any unnecessary steps for target identification. Disabled by default.")
@@ -65,6 +66,7 @@ def process_args_output(args: object) -> object:
         out_path: str = str(path_object.stem)
     elif Path(args.output).is_dir():
         output_name = str(output_name) + "/" + str(path_object.stem)
+        out_path = str(path_object.stem)
     else:
         out_path = output_name
 
@@ -88,7 +90,7 @@ def expand_multifasta(args: object) -> Iterator[str]:
     """
 
     scriptpath: object = Path(__file__).parent.resolve()
-    temp_fastas_path: str = scriptpath / ".temp_fastas"
+    temp_fastas_path: Path = scriptpath / ".temp_fastas"
     temp_fastas_path.mkdir(parents=True, exist_ok=True)
 
     for record in SeqIO.parse(args.query, "fasta"):
@@ -125,8 +127,9 @@ def blast_insertion_sequence(args: object) -> str:
     {args.other_insertion_sequence}'
 
     if not args.minimal:
-        subprocess.run(blastn_cmd_csv, shell = True)
-    subprocess.run(blastn_cmd_xml, shell = True)
+        subprocess.run(blastn_cmd_csv, shell=True, check=True)
+
+    subprocess.run(blastn_cmd_xml, shell=True, check=True)
     print("Insertion sequence blasted")
 
     # Returns the location of the blast xml output file.
@@ -139,8 +142,8 @@ def read_blastn(blastn_output: str) -> Blast.Record:
     """
     Reads the blastn output xml file and returns the output data as an Bio.Blast.Record object
     """
-    result_stream = open(f"{blastn_output}", "rb")
-    blastn_results: Blast.Record = Blast.read(result_stream)
+    with open(blastn_output, "rb") as result_stream:
+        blastn_results = Blast.read(result_stream)
     print("Blast results read")
 
     return blastn_results
@@ -173,36 +176,22 @@ def filter_alignments(alignments: object, args: object) -> list[object]:
     Takes a list of Biopython alignment objects and filters reads according to their evalue, bit score, and percent identity to the query. \n
     Returns a list object of Biopython alignment objects.
     """
-    i = 0
     satisfactory_alignments: list[object] = []
     for alignment in alignments:
-        if ((alignments[i].annotations["evalue"] <= args.evalue) 
-        and (alignments[i].annotations["bit score"] > args.bitscore_insertion_sequence * len(alignments[i].query.seq)) 
-        and (alignments[i].annotations["identity"]/len(alignments[i].query.seq)) >= args.identity):
-            satisfactory_alignments.append(alignments[i])
-        i += 1
+        if (alignment.annotations["evalue"] <= args.evalue
+            and alignment.annotations["bit score"] > args.bitscore_insertion_sequence * len(alignment.query.seq)
+            and alignment.annotations["identity"] / len(alignment.query.seq) >= args.identity):
+            satisfactory_alignments.append(alignment)
     
     return satisfactory_alignments
 
 
-def extract_filtered_flanks(filtered_blast_file: str, args: object) -> str:
+def extract_filtered_flanks(filtered_alignments: list, args: object) -> str:
     """
     Takes a list of Biopython alignment objects and stores the coordinates of the upstream and downstream flanking regions. \n
     Writes to file a list of flank coordinates for input into blastdbcmd. \n
     Then runs the blastdbcmd program to extract the sequence data from each range of coordinates. Returns the location of the blastdbcmd file containing flanks sequence data.
     """
-
-    filtered_alignments: list = []
-    records: Iterator[Blast.Record] = Blast.parse(filtered_blast_file)
-    for record in records:
-        try:
-            alignment: object = record
-        except IndexError:
-            continue
-
-        if alignment.annotations["bit score"] > args.bitscore_target * len(alignment.query.seq):
-            filtered_alignments.append(alignment)
-
     # Extract coordinates of flanking regions
     seen: set = set()
     extracted_results: list = []
@@ -228,7 +217,7 @@ def extract_filtered_flanks(filtered_blast_file: str, args: object) -> str:
 
     extracted_output_filepath: str = f"{args.output}_flanking_regions.fasta"
     cmd: str = f'blastdbcmd -db {args.database} -entry_batch {output_path} -outfmt "%f" -out {extracted_output_filepath}'
-    subprocess.run(cmd, shell=True) 
+    subprocess.run(cmd, shell=True, check=True) 
     print("Alignment flanking regions extracted")
 
     return extracted_output_filepath
@@ -243,15 +232,16 @@ def get_flanking_coords(alignment_df: object, flank_length: int) -> object:
     target_ranges: object = alignment_df["target_range"].tolist()
     flanking_coords: list[list] = []
 
-    for range in target_ranges:
-        ranges: str = range.split("-")
+    for target_range in target_ranges:
+        ranges: str = target_range.split("-")
         i = 0
         for coordinate in ranges:
             if i == 0:
-                lower_range: str = f"{str(int(coordinate) - int(flank_length) - 1)}-{str(int(coordinate) - 1)}"
+                lower_start = max(1, int(coordinate) - flank_length - 1)
+                lower_range = f"{lower_start}-{int(coordinate) - 1}"
                 i = 1
             elif i == 1:
-                upper_range: str = f"{str(int(coordinate) + 1)}-{str(int(coordinate) + int(flank_length) + 1)}"
+                upper_range: str = f"{str(int(coordinate) + 1)}-{str(int(coordinate) + flank_length + 1)}"
         flanking_coords.append([lower_range, upper_range])
     flanking_coords_df = pd.DataFrame(flanking_coords, columns = ["lower_flank", "upper_flank"])
 
@@ -338,8 +328,8 @@ def blastn_flanking_regions(args: object, flanking_regions_path: str) -> str:
     """
 
     if not args.minimal:
-        subprocess.run(blastn_cmd_txt, shell=True)
-    subprocess.run(blastn_cmd_xml, shell=True)
+        subprocess.run(blastn_cmd_txt, shell=True, check=True)
+    subprocess.run(blastn_cmd_xml, shell=True, check=True)
 
     print("Flanks blasted")
 
@@ -350,6 +340,10 @@ def process_target_hits(flanking_blast_output_dir: str, args: object) -> None:
     """
     Filters blast hits of the concatenated flanking regions by their bit score, and writes satisfactory targets to a file.
     """
+    xml_path: Path = Path(flanking_blast_output_dir)
+    if not xml_path.exists() or xml_path.stat().st_size == 0:
+        print("Flanking blast XML is empty or missing. No targets identified.")
+        return
 
     records: Iterator[Blast.Record] = Blast.parse(flanking_blast_output_dir)
 
@@ -386,7 +380,8 @@ def process_target_hits(flanking_blast_output_dir: str, args: object) -> None:
                     seen_targets.add(unique_id)
     if record_indexerror > 0:
         print(f"Record indexerror events:  {record_indexerror}")
-    print(f"Excluded {skipped_targets} of {total_targets} ({(skipped_targets / total_targets * 100):.2f}%) target sequences due to low bit score.")
+    if total_targets > 0:
+        print(f"Excluded {skipped_targets} of {total_targets} ({skipped_targets / total_targets * 100:.2f}%) ...")
     print(f"Total of {len(seen_targets)} unique targets written to: {unique_output_path}")
     print(f"All {total_targets - skipped_targets} targets written to: {all_output_path}")
 
@@ -431,9 +426,7 @@ def extract_alignment_sequence_alternate(alignment: object) -> str:
     Super inefficient because it checks if there is a base present for each coordinate of the target sequence range. 
     """
 
-    coords_sorted = []
     alignment_target_sequence = ""
-    alignments_coordinates_length = len(alignment.coordinates[0])
     coords_sorted = sorted(alignment.coordinates[0])
 
     """
@@ -442,7 +435,7 @@ def extract_alignment_sequence_alternate(alignment: object) -> str:
     """
 
     alignments_coordinates_lower = coords_sorted[0]
-    alignments_coordinates_upper = coords_sorted[alignments_coordinates_length - 1]
+    alignments_coordinates_upper = coords_sorted[-1]
     j = alignments_coordinates_lower
     while j < alignments_coordinates_upper:
         try:
@@ -454,19 +447,18 @@ def extract_alignment_sequence_alternate(alignment: object) -> str:
     return alignment_target_sequence
 
 
-def write_file(content: str, filename: str, type: str) -> None:
+def write_file(content: str, filename: str, mode: str) -> None:
     """
     Writes or appends any content parsed into this function into a plaintext file. \n
     Has two writing types: \n
     parse the string "w" into type to write(overwrites existing data). \n
     parse the string "a" or "append" into type to append (adds to any existing text in the file).
     """
-    mode: str = "w"
-    if type == "append" or type == "a":
-        mode = "a"
-    file = open(filename, f"{mode}")
-    file.write(content)
-    file.close
+    mode = "w"
+    write_mode = "a" if mode in ("append", "a") else "w"
+    with open(filename, write_mode) as f:
+        f.write(content)
+    file.close()
 
 
 
@@ -480,10 +472,14 @@ def main() -> None:
         insertion_seq_blastn_output: str = blast_insertion_sequence(args)
         blastn_results: Blast.Record = read_blastn(insertion_seq_blastn_output)
         filtered_alignments: list[object] = process_and_write_hits(blastn_results, args)
+        if not filtered_alignments:
+            print("No satisfactory IS alignments found. Skipping.")
+            continue
         flanks_output_location: str = extract_filtered_flanks(filtered_alignments, args)
         flanking_regions_path: str = combine_flanks(flanks_output_location, args)
         blasted_flanks_path: str = blastn_flanking_regions(args, flanking_regions_path)
         process_target_hits(blasted_flanks_path, args)
+    shutil.rmtree(Path(__file__).parent / ".temp_fastas", ignore_errors=True)
 
 
 if __name__ == "__main__":
