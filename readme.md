@@ -18,9 +18,9 @@ Below is an example of how to use the Insertion Sequence Targets program.
 
 ``` bash
 python identify_targets.py \
-    --query examples/IS15.fasta \
+    --query examples/ISEC11.fasta \
     --database /path/to/blastdb \
-    --output examples/IS15 \
+    --output examples/ISEC11 \
     --threads 1
 ```
 
