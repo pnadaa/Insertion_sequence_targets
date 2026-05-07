@@ -90,13 +90,17 @@ def expand_multifasta(args: object) -> Iterator[str]:
     """
 
     scriptpath: object = Path(__file__).parent.resolve()
-    temp_fastas_path: Path = scriptpath / ".temp_fastas"
+
+    temp_fastas_path: Path = scriptpath / f".temp_fastas_{Path(args.query).stem}"
     temp_fastas_path.mkdir(parents=True, exist_ok=True)
 
     for record in SeqIO.parse(args.query, "fasta"):
         fasta_name: str = re.sub(r"[/\\?%*:|\"<>\x7F\x00-\x1F ]", "_", record.id)
-        output_path: str = temp_fastas_path / f"{fasta_name}.fasta"
+        output_path: Path = temp_fastas_path / f"{fasta_name}.fasta"
         SeqIO.write(record, output_path, "fasta")
+
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            raise FileNotFoundError(f"Temp FASTA was not written correctly: {output_path}")
 
         yield str(output_path)
 
@@ -465,6 +469,8 @@ def write_file(content: str, filename: str, mode: str) -> None:
 def main() -> None:
     args: object = parse_args()
     target_dir = args.output
+    temp_fastas_path: Path = Path(__file__).parent.resolve() / f".temp_fastas_{Path(args.query).stem}"
+
     for fasta_path in expand_multifasta(args):
         args.output = target_dir
         args.query = fasta_path
@@ -479,7 +485,8 @@ def main() -> None:
         flanking_regions_path: str = combine_flanks(flanks_output_location, args)
         blasted_flanks_path: str = blastn_flanking_regions(args, flanking_regions_path)
         process_target_hits(blasted_flanks_path, args)
-    shutil.rmtree(Path(__file__).parent / ".temp_fastas", ignore_errors=True)
+
+    shutil.rmtree(temp_fastas_path, ignore_errors=True)
 
 
 if __name__ == "__main__":
