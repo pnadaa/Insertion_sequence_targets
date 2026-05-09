@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-go", "--gapopen", required = False, default = "0", type = int, help = "Gap open penalty. Default = 0. Only change if you need to alter blastn parameters")
     parser.add_argument("-ge", "--gapextend", required = False, default = "4", type = int, help = "Gap extend penalty. Default =4 . Only change if you need to alter blastn parameters")
     parser.add_argument("-a", "--alignments", required = False, default = "1", type = int, help = "Maximum number of alignments per target sequence. Default = 1. Only change if you need to alter blastn parameters")
-    parser.add_argument("-e", "--evalue", required = False, default = "0", type = float, help = "Threshold evalue for filtering insertion sequence blast searches. Default = 0")
+    parser.add_argument("-e", "--evalue", required = False, default = "1e-10", type = float, help = "Threshold evalue for filtering insertion sequence blast searches. Default = 1e-10")
     parser.add_argument("-i", "--identity", required = False, default = "0.95", type = float, help = "Threshold percent identity for filtering insertion sequence blast searches. Default = 0.95")
     parser.add_argument("-bi", "--bitscore_insertion_sequence", required = False, type = float, default = "1.5", help = "Threshold bitscore multiplier for filtering insertion sequence blast searches. Lower is more lenient. Default = 1.5")
     parser.add_argument("-bt", "--bitscore_target", required = False, default = "1.1", type = float, help = "Threshold bitscore multiplier for filtering target sequence blasts. Lower is more lenient but would not recommend changing. Default = 1.1")
@@ -214,10 +214,18 @@ def extract_filtered_flanks(filtered_alignments: list, args: object) -> str:
 
     # Write coords to file for blastdbcmd
     output_path: object = Path(f"{args.output}_filtered_target_coords.fasta")
+    skipped_no_flank: int = 0
     with output_path.open("w") as f_out:
         for (target_name, _), (lower, upper) in zip(extracted_results, flanking_df.values.tolist()):
+            if pd.isna(lower) or pd.isna(upper):
+                # IS hit had no valid upstream flank (e.g., at position 1 of a contig).
+                # pandas coerces None -> NaN when round-tripping through a DataFrame, so isna catches both.
+                skipped_no_flank += 1
+                continue
             f_out.write(f"{target_name} {lower}\n")
             f_out.write(f"{target_name} {upper}\n")
+    if skipped_no_flank > 0:
+        print(f"Skipped {skipped_no_flank} IS hit(s) with no valid upstream flank (at contig start)")
 
     extracted_output_filepath: str = f"{args.output}_flanking_regions.fasta"
     cmd: str = f'blastdbcmd -db {args.database} -entry_batch {output_path} -outfmt "%f" -out {extracted_output_filepath}'
@@ -241,12 +249,17 @@ def get_flanking_coords(alignment_df: object, flank_length: int) -> object:
         i = 0
         for coordinate in ranges:
             if i == 0:
-                lower_start = max(1, int(coordinate) - flank_length - 1)
-                lower_range = f"{lower_start}-{int(coordinate) - 1}"
+                lower_start = max(1, int(coordinate) - flank_length)
+                lower_end = int(coordinate) - 1
+                lower_range = f"{lower_start}-{lower_end}"
                 i = 1
             elif i == 1:
-                upper_range: str = f"{str(int(coordinate) + 1)}-{str(int(coordinate) + flank_length + 1)}"
-        flanking_coords.append([lower_range, upper_range])
+                upper_range: str = f"{str(int(coordinate) + 1)}-{str(int(coordinate) + flank_length)}"
+        # IS hit at position 1 of a contig has no upstream flank — flag for skipping.
+        if lower_end < lower_start:
+            flanking_coords.append([None, None])
+        else:
+            flanking_coords.append([lower_range, upper_range])
     flanking_coords_df = pd.DataFrame(flanking_coords, columns = ["lower_flank", "upper_flank"])
 
     return(flanking_coords_df)
@@ -261,24 +274,36 @@ def combine_flanks(fasta_dir: str, args: object) -> str:
     flanks_length_limit: int = int(args.flank_length) + 50
     flanking_regions: list[SeqRecord] = []
     not_in_seq: int = 0
-    # Open the file containing separate flanking regions, append the downstream flank to the end of the upstream one and save in a list.
+
+    coords_file: str = f"{args.output}_filtered_target_coords.fasta"
+    with open(coords_file) as f:
+        coord_lines: list[str] = [line.strip() for line in f if line.strip()]
+
     with open(f"{fasta_dir}") as handle:
-        records: object = SeqIO.parse(handle, "fasta")
-        i = 0
-        for record in records:
-            if i % 2 == 0:
-                flanks_upstream: str = record.seq
-                flanks_upstream_coords: str = record.id.split(":")[len(record.id.split(":"))-1]
-            elif i % 2 != 0:
-                flanks_downstream: str = record.seq
-                flanks_flanks_downstream_coords: str = record.id.split(":")[len(record.id.split(":"))-1]
-                if len(flanks_upstream) <= flanks_length_limit and len(flanks_downstream) <= flanks_length_limit:
-                    flanking_regions.append(SeqRecord(flanks_upstream + flanks_downstream, 
-                    id = record.id.split(":")[0] + ":" + flanks_upstream_coords + ":" + flanks_flanks_downstream_coords, 
-                    description = record.description.split(" ", 1)[len(record.description.split(" ", 1)) - 1]))
-                else:
-                    not_in_seq += 1
-            i += 1
+        records: list = list(SeqIO.parse(handle, "fasta"))
+
+    if len(records) != len(coord_lines):
+        raise RuntimeError(
+            f"blastdbcmd returned {len(records)} records for {len(coord_lines)} requested "
+            f"entries — cannot pair flanks reliably. Check {coords_file} and the database."
+        )
+
+    for j in range(0, len(coord_lines) - 1, 2):
+        upstream_target, upstream_coord = coord_lines[j].split(" ", 1)
+        _, downstream_coord = coord_lines[j + 1].split(" ", 1)
+        upstream_record = records[j]
+        downstream_record = records[j + 1]
+
+        flanks_upstream = upstream_record.seq
+        flanks_downstream = downstream_record.seq
+        if len(flanks_upstream) <= flanks_length_limit and len(flanks_downstream) <= flanks_length_limit:
+            description_parts = upstream_record.description.split(" ", 1)
+            description = description_parts[1] if len(description_parts) > 1 else ""
+            flanking_regions.append(SeqRecord(flanks_upstream + flanks_downstream,
+                id = f"{upstream_target}:{upstream_coord}:{downstream_coord}",
+                description = description))
+        else:
+            not_in_seq += 1
     # Write the combined flanks into a file
     output_path: str = f"{args.output}_concat_flanks.fasta"
     SeqIO.write(flanking_regions, output_path, "fasta")
@@ -403,8 +428,10 @@ def extract_alignment_target_seq(alignments: list, id_type: str, process_reverse
     for alignment in alignments:
         reverse_comp: int = 0
         try:
-            for ranges in alignment.target.seq._data.defined_ranges:
-                target_sequence: str = str(alignment.target.seq[ranges[0]:ranges[1]])
+            target_sequence: str = "".join(
+                str(alignment.target.seq[ranges[0]:ranges[1]])
+                for ranges in alignment.target.seq._data.defined_ranges
+            )
         except AttributeError:
             target_sequence = extract_alignment_sequence_alternate(alignment)
 
@@ -419,6 +446,8 @@ def extract_alignment_target_seq(alignments: list, id_type: str, process_reverse
             target_lower, target_upper = target_upper, target_lower
             target_sequence = str(Seq(target_sequence).reverse_complement())
             reverse_comp = 0
+
+        target_lower += 1
 
         yield [target_id, target_sequence, target_lower, target_upper, reverse_comp]
 
@@ -458,11 +487,9 @@ def write_file(content: str, filename: str, mode: str) -> None:
     parse the string "w" into type to write(overwrites existing data). \n
     parse the string "a" or "append" into type to append (adds to any existing text in the file).
     """
-    mode = "w"
     write_mode = "a" if mode in ("append", "a") else "w"
     with open(filename, write_mode) as f:
         f.write(content)
-    file.close()
 
 
 
@@ -471,22 +498,23 @@ def main() -> None:
     target_dir = args.output
     temp_fastas_path: Path = Path(__file__).parent.resolve() / f".temp_fastas_{Path(args.query).stem}"
 
-    for fasta_path in expand_multifasta(args):
-        args.output = target_dir
-        args.query = fasta_path
-        args = process_args_output(args)
-        insertion_seq_blastn_output: str = blast_insertion_sequence(args)
-        blastn_results: Blast.Record = read_blastn(insertion_seq_blastn_output)
-        filtered_alignments: list[object] = process_and_write_hits(blastn_results, args)
-        if not filtered_alignments:
-            print("No satisfactory IS alignments found. Skipping.")
-            continue
-        flanks_output_location: str = extract_filtered_flanks(filtered_alignments, args)
-        flanking_regions_path: str = combine_flanks(flanks_output_location, args)
-        blasted_flanks_path: str = blastn_flanking_regions(args, flanking_regions_path)
-        process_target_hits(blasted_flanks_path, args)
-
-    shutil.rmtree(temp_fastas_path, ignore_errors=True)
+    try:
+        for fasta_path in expand_multifasta(args):
+            args.output = target_dir
+            args.query = fasta_path
+            args = process_args_output(args)
+            insertion_seq_blastn_output: str = blast_insertion_sequence(args)
+            blastn_results: Blast.Record = read_blastn(insertion_seq_blastn_output)
+            filtered_alignments: list[object] = process_and_write_hits(blastn_results, args)
+            if not filtered_alignments:
+                print("No satisfactory IS alignments found. Skipping.")
+                continue
+            flanks_output_location: str = extract_filtered_flanks(filtered_alignments, args)
+            flanking_regions_path: str = combine_flanks(flanks_output_location, args)
+            blasted_flanks_path: str = blastn_flanking_regions(args, flanking_regions_path)
+            process_target_hits(blasted_flanks_path, args)
+    finally:
+        shutil.rmtree(temp_fastas_path, ignore_errors=True)
 
 
 if __name__ == "__main__":
